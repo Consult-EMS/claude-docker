@@ -87,5 +87,4 @@ fi
 
 # Start Claude Code with permissions bypass
 echo "Starting Claude Code..."
-echo "  Command: claude ${CLAUDE_CONTINUE_FLAG:-} --dangerously-skip-permissions $*"
 exec claude ${CLAUDE_CONTINUE_FLAG:-} --dangerously-skip-permissions "$@"

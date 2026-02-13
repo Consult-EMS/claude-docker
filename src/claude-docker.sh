@@ -69,8 +69,15 @@ if [ -z "$HOST_HOME" ]; then
 fi
 
 # Extract Claude authentication from platform credential store (macOS/Linux/WSL2)
+# Write credentials directly to ~/.claude/.credentials.json for seamless mount
 CLAUDE_AUTH_FILE=""
 CLAUDE_AUTH_FILE=$(extract_and_store_credentials || true)
+if [ -n "$CLAUDE_AUTH_FILE" ] && [ -f "$CLAUDE_AUTH_FILE" ]; then
+    CLAUDE_HOME_DIR_TEMP=$(get_default_claude_dir)
+    mkdir -p "$CLAUDE_HOME_DIR_TEMP"
+    cp "$CLAUDE_AUTH_FILE" "$CLAUDE_HOME_DIR_TEMP/.credentials.json"
+    # Temp file will be cleaned up by cleanup trap
+fi
 
 # Use user's actual ~/.claude config (or CLAUDE_USER_CONFIG override)
 CLAUDE_HOME_DIR=$(get_default_claude_dir)
@@ -249,11 +256,8 @@ else
     echo "No additional conda directories configured"
 fi
 
-# Mount auth file if available
-AUTH_MOUNT=""
-if [ -n "$CLAUDE_AUTH_FILE" ] && [ -f "$CLAUDE_AUTH_FILE" ]; then
-    AUTH_MOUNT="-v $CLAUDE_AUTH_FILE:/home/claude-user/.claude.json:ro"
-fi
+# Auth is now written directly to ~/.claude/.credentials.json above
+# No separate mount needed - handled by CLAUDE_MOUNTS
 
 # Mount MCP servers config for runtime installation
 MCP_MOUNT=""
@@ -272,12 +276,16 @@ trap cleanup EXIT
 
 # Run Claude Code in Docker
 echo "Starting Claude Code in Docker..."
-"$DOCKER" run -it --rm \
+# Use -it only if we have a TTY
+TTY_FLAGS=""
+if [ -t 0 ] && [ -t 1 ]; then
+    TTY_FLAGS="-it"
+fi
+"$DOCKER" run $TTY_FLAGS --rm \
     $DOCKER_OPTS \
     -v "$CURRENT_DIR:/workspace" \
     $CLAUDE_MOUNTS \
     -v "$SSH_DIR:/home/claude-user/.ssh:ro" \
-    $AUTH_MOUNT \
     $MCP_MOUNT \
     $MOUNT_ARGS \
     $ENV_ARGS \
