@@ -29,7 +29,7 @@ if [ -f "$HOME/.claude.json" ]; then
     echo "Claude authentication loaded"
 else
     echo "WARNING: No Claude authentication found"
-    echo "Add to Keychain: security add-generic-password -s 'claude-auth' -a '\$USER' -w '\$(cat ~/.claude.json)'"
+    echo "Add to Keychain: security add-generic-password -s 'Claude Code-credentials' -a '\$USER' -w '\$(cat ~/.claude.json)'"
 fi
 
 # Check for existing authentication
@@ -87,4 +87,5 @@ fi
 
 # Start Claude Code with permissions bypass
 echo "Starting Claude Code..."
-exec claude $CLAUDE_CONTINUE_FLAG --dangerously-skip-permissions "$@"
+echo "  Command: claude ${CLAUDE_CONTINUE_FLAG:-} --dangerously-skip-permissions $*"
+exec claude ${CLAUDE_CONTINUE_FLAG:-} --dangerously-skip-permissions "$@"

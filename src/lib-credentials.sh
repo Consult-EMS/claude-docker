@@ -2,7 +2,7 @@
 # ABOUTME: Cross-platform credential extraction library for Claude authentication
 # ABOUTME: Supports macOS Keychain, Linux libsecret, and WSL2 Windows Credential Manager
 
-KEYCHAIN_SERVICE="claude-auth"
+KEYCHAIN_SERVICE="Claude Code-credentials"
 
 # Detect host platform - order matters (WSL2 must be checked before Linux)
 detect_host_platform() {
