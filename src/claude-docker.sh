@@ -56,9 +56,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Validate runtime and resolve persistent host directory before any build/run operations.
+# Validate container runtime
 check_container_runtime "$DOCKER" "1.44"
-resolve_claude_docker_dir
 
 # Get the absolute path of the current directory
 CURRENT_DIR=$(pwd)
@@ -67,8 +66,30 @@ if [ -z "$HOST_HOME" ]; then
     HOST_HOME="$(get_home_for_uid "$(id -u)" || true)"
 fi
 
-CLAUDE_HOME_DIR="$CLAUDE_DOCKER_DIR/claude-home"
-SSH_DIR="$CLAUDE_DOCKER_DIR/ssh"
+# Extract Claude authentication from macOS Keychain to temp file
+CLAUDE_AUTH_FILE=""
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    KEYCHAIN_AUTH=$(security find-generic-password -s "claude-auth" -w 2>/dev/null || true)
+    if [ -n "$KEYCHAIN_AUTH" ]; then
+        echo "Found Claude authentication in Keychain"
+        CLAUDE_AUTH_FILE=$(mktemp)
+        echo "$KEYCHAIN_AUTH" > "$CLAUDE_AUTH_FILE"
+        chmod 600 "$CLAUDE_AUTH_FILE"
+    else
+        echo "No 'claude-auth' entry found in Keychain"
+        echo "To add: security add-generic-password -s 'claude-auth' -a '\$USER' -w '\$(cat ~/.claude.json)'"
+        # Fall back to file-based auth if keychain not available
+        if [ -n "$HOST_HOME" ] && [ -f "$HOST_HOME/.claude.json" ]; then
+            echo "Using fallback: ~/.claude.json file"
+            CLAUDE_AUTH_FILE="$HOST_HOME/.claude.json"
+        fi
+    fi
+fi
+
+# Use .claude submodule from this repo as the shared config
+CLAUDE_HOME_DIR="$PROJECT_ROOT/.claude"
+# Use user's existing SSH keys
+SSH_DIR="$HOST_HOME/.ssh"
 
 # Check if .env exists in claude-docker directory for building
 ENV_FILE="$PROJECT_ROOT/.env"
@@ -114,14 +135,13 @@ if [ -n "${NO_CACHE:-}" ] && [ "$NEED_REBUILD" = false ]; then
 fi
 
 if [ "$NEED_REBUILD" = true ]; then
-    # Copy authentication files to build context
-    if [ -n "$HOST_HOME" ] && [ -f "$HOST_HOME/.claude.json" ]; then
-        cp "$HOST_HOME/.claude.json" "$PROJECT_ROOT/.claude.json"
+    # Get git config: prefer .env overrides, fall back to host git config
+    if [ -z "${GIT_USER_NAME:-}" ]; then
+        GIT_USER_NAME=$(git config --global --get user.name 2>/dev/null || echo "")
     fi
-    
-    # Get git config from host
-    GIT_USER_NAME=$(git config --global --get user.name 2>/dev/null || echo "")
-    GIT_USER_EMAIL=$(git config --global --get user.email 2>/dev/null || echo "")
+    if [ -z "${GIT_USER_EMAIL:-}" ]; then
+        GIT_USER_EMAIL=$(git config --global --get user.email 2>/dev/null || echo "")
+    fi
     
     # Build docker command with conditional system packages and git config
     BUILD_ARGS="--build-arg USER_UID=$(id -u) --build-arg USER_GID=$(id -g)"
@@ -138,64 +158,25 @@ if [ "$NEED_REBUILD" = true ]; then
     fi
 
     eval "'$DOCKER' build $NO_CACHE $BUILD_ARGS -t claude-docker:latest \"$PROJECT_ROOT\""
-    
-    # Clean up copied auth files
-    rm -f "$PROJECT_ROOT/.claude.json"
 fi
 
-# Ensure the claude-home and ssh directories exist
-mkdir -p "$CLAUDE_HOME_DIR"
-mkdir -p "$SSH_DIR"
-
-# Copy authentication files to persistent claude-home if they don't exist
-if [ -n "$HOST_HOME" ] && [ -f "$HOST_HOME/.claude/.credentials.json" ] && [ ! -f "$CLAUDE_HOME_DIR/.credentials.json" ]; then
-    echo "✓ Copying Claude authentication to persistent directory"
-    cp "$HOST_HOME/.claude/.credentials.json" "$CLAUDE_HOME_DIR/.credentials.json"
+# Verify required directories exist
+if [ ! -d "$CLAUDE_HOME_DIR" ]; then
+    echo "ERROR: Claude config directory not found: $CLAUDE_HOME_DIR"
+    echo "Run: git submodule update --init --recursive"
+    exit 1
 fi
 
-# Log information about persistent Claude home directory
+# Log configuration info
 echo ""
-echo "📁 Claude persistent home directory: $CLAUDE_HOME_DIR/"
-echo "   This directory contains Claude's settings and CLAUDE.md instructions"
-echo "   Modify files here to customize Claude's behavior across all projects"
-echo ""
+echo "Claude config: $CLAUDE_HOME_DIR/"
+echo "SSH keys: $SSH_DIR/"
 
 # Check SSH key setup
-SSH_KEY_PATH="$SSH_DIR/id_rsa"
-SSH_PUB_KEY_PATH="$SSH_DIR/id_rsa.pub"
-
-if [ ! -f "$SSH_KEY_PATH" ] || [ ! -f "$SSH_PUB_KEY_PATH" ]; then
-    echo ""
-    echo "⚠️  SSH keys not found for git operations"
-    echo "   To enable git push/pull in Claude Docker:"
-    echo ""
-    echo "   1. Generate SSH key:"
-    echo "      ssh-keygen -t rsa -b 4096 -f $SSH_DIR/id_rsa -N ''"
-    echo ""
-    echo "   2. Add public key to GitHub:"
-    echo "      cat $SSH_DIR/id_rsa.pub"
-    echo "      # Copy output and add to: GitHub → Settings → SSH Keys"
-    echo ""
-    echo "   3. Test connection:"
-    echo "      ssh -T git@github.com -i $SSH_DIR/id_rsa"
-    echo ""
-    echo "   Claude will continue without SSH keys (read-only git operations only)"
-    echo ""
+if [ -f "$SSH_DIR/id_rsa" ]; then
+    echo "SSH keys found for git operations"
 else
-    echo "✓ SSH keys found for git operations"
-    
-    # Create SSH config if it doesn't exist
-    SSH_CONFIG_PATH="$SSH_DIR/config"
-    if [ ! -f "$SSH_CONFIG_PATH" ]; then
-        cat > "$SSH_CONFIG_PATH" << 'EOF'
-Host github.com
-    HostName github.com
-    User git
-    IdentityFile ~/.ssh/id_rsa
-    IdentitiesOnly yes
-EOF
-        echo "✓ SSH config created for GitHub"
-    fi
+    echo "No SSH keys found - git push/pull may not work"
 fi
 
 # Prepare additional mount arguments
@@ -277,13 +258,28 @@ else
     echo "No additional conda directories configured"
 fi
 
+# Mount auth file if available
+AUTH_MOUNT=""
+if [ -n "$CLAUDE_AUTH_FILE" ] && [ -f "$CLAUDE_AUTH_FILE" ]; then
+    AUTH_MOUNT="-v $CLAUDE_AUTH_FILE:/home/claude-user/.claude.json:ro"
+fi
+
+# Cleanup temp auth file on exit
+cleanup() {
+    if [ -n "${CLAUDE_AUTH_FILE:-}" ] && [[ "$CLAUDE_AUTH_FILE" == /tmp/* ]]; then
+        rm -f "$CLAUDE_AUTH_FILE"
+    fi
+}
+trap cleanup EXIT
+
 # Run Claude Code in Docker
 echo "Starting Claude Code in Docker..."
 "$DOCKER" run -it --rm \
     $DOCKER_OPTS \
     -v "$CURRENT_DIR:/workspace" \
-    -v "$CLAUDE_HOME_DIR:/home/claude-user/.claude:rw" \
-    -v "$SSH_DIR:/home/claude-user/.ssh:rw" \
+    -v "$CLAUDE_HOME_DIR:/home/claude-user/.claude:ro" \
+    -v "$SSH_DIR:/home/claude-user/.ssh:ro" \
+    $AUTH_MOUNT \
     $MOUNT_ARGS \
     $ENV_ARGS \
     -e CLAUDE_CONTINUE_FLAG="$CONTINUE_FLAG" \

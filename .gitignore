@@ -37,5 +37,7 @@ commit_diff_summary.txt
 # Serena MCP cache
 .serena/
 
-# Local Claude settings
+# Local Claude settings and overrides
 .claude/settings.local.json
+.claude.local/
+.claude.backup/

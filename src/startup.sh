@@ -24,6 +24,14 @@ else
     echo "WARNING: No .env file found in image."
 fi
 
+# Check for Claude authentication (mounted from host)
+if [ -f "$HOME/.claude.json" ]; then
+    echo "Claude authentication loaded"
+else
+    echo "WARNING: No Claude authentication found"
+    echo "Add to Keychain: security add-generic-password -s 'claude-auth' -a '\$USER' -w '\$(cat ~/.claude.json)'"
+fi
+
 # Check for existing authentication
 if [ -f "$HOME/.claude/.credentials.json" ]; then
     echo "Found existing Claude authentication"

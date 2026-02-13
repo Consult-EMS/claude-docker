@@ -77,15 +77,14 @@ TARGET_SHELL="$(get_user_shell_from_passwd "$TARGET_USER")"
 TARGET_RC_NAME="$(get_shell_rc_filename "$TARGET_SHELL")"
 TARGET_RC_FILE="$TARGET_HOME/$TARGET_RC_NAME"
 
-resolve_claude_docker_dir "$TARGET_HOME"
-CLAUDE_HOME_DIR="$CLAUDE_DOCKER_DIR/claude-home"
-
-# Create claude persistence directory
-mkdir -p "$CLAUDE_HOME_DIR"
-
-# Copy template .claude contents to persistent directory
-echo "✓ Copying template Claude configuration to persistent directory"
-cp -r "$PROJECT_ROOT/.claude/." "$CLAUDE_HOME_DIR/"
+# Initialize git submodules (for .claude configuration template)
+echo "Initializing git submodules..."
+if [ -f "$PROJECT_ROOT/.gitmodules" ]; then
+    (cd "$PROJECT_ROOT" && git submodule update --init --recursive)
+    echo "Git submodules initialized"
+else
+    echo "WARNING: No .gitmodules found - .claude/ may not be configured"
+fi
 
 # Copy example env file if doesn't exist
 if [ ! -f "$PROJECT_ROOT/.env" ]; then
@@ -112,7 +111,6 @@ fi
 
 # Fix ownership when run with sudo so the invoking user can modify generated files.
 if [ "$EUID" -eq 0 ] && [ "$TARGET_USER" != "root" ]; then
-    chown -R "$TARGET_UID:$TARGET_GID" "$CLAUDE_DOCKER_DIR"
     chown "$TARGET_UID:$TARGET_GID" "$TARGET_RC_FILE"
     if [ -f "$PROJECT_ROOT/.env" ]; then
         chown "$TARGET_UID:$TARGET_GID" "$PROJECT_ROOT/.env"
@@ -122,6 +120,7 @@ fi
 # Make scripts executable
 chmod +x "$PROJECT_ROOT/src/claude-docker.sh"
 chmod +x "$PROJECT_ROOT/src/startup.sh"
+chmod +x "$PROJECT_ROOT/src/setup-keychain-auth.sh"
 
 # Check for GPU support
 echo ""
@@ -173,10 +172,12 @@ else
 fi
 
 echo ""
-echo "Installation complete! 🎉"
+echo "Installation complete!"
 echo ""
 echo "Next steps:"
 echo "1. (Optional) Edit $PROJECT_ROOT/.env with your API keys"
 echo "2. Run 'source $TARGET_RC_FILE' or start a new terminal"
-echo "3. Navigate to any project and run 'claude-docker' to start"
-echo "4. If no API key, Claude will prompt for interactive authentication"
+echo "3. Store Claude auth in Keychain (macOS only):"
+echo "   $PROJECT_ROOT/src/setup-keychain-auth.sh"
+echo "4. Navigate to any project and run 'claude-docker' to start"
+echo "5. If no API key, Claude will prompt for interactive authentication"
