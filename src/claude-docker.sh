@@ -8,6 +8,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 source "$SCRIPT_DIR/lib-common.sh"
+source "$SCRIPT_DIR/lib-credentials.sh"
 
 # Parse command line arguments
 DOCKER="${DOCKER:-docker}"
@@ -66,25 +67,9 @@ if [ -z "$HOST_HOME" ]; then
     HOST_HOME="$(get_home_for_uid "$(id -u)" || true)"
 fi
 
-# Extract Claude authentication from macOS Keychain to temp file
+# Extract Claude authentication from platform credential store (macOS/Linux/WSL2)
 CLAUDE_AUTH_FILE=""
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    KEYCHAIN_AUTH=$(security find-generic-password -s "claude-auth" -w 2>/dev/null || true)
-    if [ -n "$KEYCHAIN_AUTH" ]; then
-        echo "Found Claude authentication in Keychain"
-        CLAUDE_AUTH_FILE=$(mktemp)
-        echo "$KEYCHAIN_AUTH" > "$CLAUDE_AUTH_FILE"
-        chmod 600 "$CLAUDE_AUTH_FILE"
-    else
-        echo "No 'claude-auth' entry found in Keychain"
-        echo "To add: security add-generic-password -s 'claude-auth' -a '\$USER' -w '\$(cat ~/.claude.json)'"
-        # Fall back to file-based auth if keychain not available
-        if [ -n "$HOST_HOME" ] && [ -f "$HOST_HOME/.claude.json" ]; then
-            echo "Using fallback: ~/.claude.json file"
-            CLAUDE_AUTH_FILE="$HOST_HOME/.claude.json"
-        fi
-    fi
-fi
+CLAUDE_AUTH_FILE=$(extract_and_store_credentials || true)
 
 # Use .claude submodule from this repo as the shared config
 CLAUDE_HOME_DIR="$PROJECT_ROOT/.claude"
