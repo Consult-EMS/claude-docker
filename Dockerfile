@@ -1,5 +1,5 @@
-# ABOUTME: Docker image for Claude Code with Twilio MCP server
-# ABOUTME: Provides autonomous Claude Code environment with SMS notifications
+# ABOUTME: Docker image for Claude Code with runtime MCP server support
+# ABOUTME: Provides isolated Claude Code environment with cross-platform auth and config sharing
 
 FROM node:20.18.1-slim
 
@@ -65,20 +65,13 @@ RUN mkdir -p /app/.claude /home/claude-user/.claude
 COPY src/startup.sh /app/
 RUN chmod +x /app/startup.sh
 
-# Copy .claude directory for runtime use
-COPY .claude /app/.claude
-
 # Copy .env file during build to bake credentials into the image
 # This enables one-time setup - no need for .env in project directories
 COPY .env /app/.env
 
-# Copy CLAUDE.md template directly to final location
-COPY .claude/CLAUDE.md /home/claude-user/.claude/CLAUDE.md
-
-# Copy MCP server configuration files (as root)
-COPY mcp-servers.txt /app/
-COPY install-mcp-servers.sh /app/
-RUN chmod +x /app/install-mcp-servers.sh
+# Copy runtime MCP installer (MCP servers installed at startup, not build time)
+COPY src/install-mcp-runtime.sh /app/
+RUN chmod +x /app/install-mcp-runtime.sh
 
 # Set proper ownership for everything
 RUN chown -R claude-user /app /home/claude-user
@@ -96,8 +89,8 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 # Add claude-user's local bin to PATH
 ENV PATH="/home/claude-user/.local/bin:${PATH}"
 
-# Install MCP servers from configuration file
-RUN /app/install-mcp-servers.sh
+# MCP servers are now installed at runtime via startup.sh
+# This allows per-project MCP configuration without rebuilding
 
 # Configure git user during build using host git config passed as build args
 ARG GIT_USER_NAME=""
