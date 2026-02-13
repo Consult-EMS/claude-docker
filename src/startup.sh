@@ -59,10 +59,16 @@ else
 fi
 
 # Verify Twilio MCP configuration
-if [ -n "$TWILIO_ACCOUNT_SID" ] && [ -n "$TWILIO_AUTH_TOKEN" ]; then
-    echo "✓ Twilio MCP server configured - SMS notifications enabled"
+if [ -n "${TWILIO_ACCOUNT_SID:-}" ] && [ -n "${TWILIO_AUTH_TOKEN:-}" ]; then
+    echo "Twilio MCP server configured - SMS notifications enabled"
 else
     echo "No Twilio credentials found - SMS notifications disabled"
+fi
+
+# Install MCP servers at runtime if config mounted
+if [ -f /app/mcp-servers.txt ]; then
+    echo "Installing MCP servers from runtime config..."
+    /app/install-mcp-runtime.sh
 fi
 
 # # Export environment variables from settings.json
