@@ -9,6 +9,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 source "$SCRIPT_DIR/lib-common.sh"
 source "$SCRIPT_DIR/lib-credentials.sh"
+source "$SCRIPT_DIR/lib-mounts.sh"
 
 # Parse command line arguments
 DOCKER="${DOCKER:-docker}"
@@ -71,10 +72,12 @@ fi
 CLAUDE_AUTH_FILE=""
 CLAUDE_AUTH_FILE=$(extract_and_store_credentials || true)
 
-# Use .claude submodule from this repo as the shared config
-CLAUDE_HOME_DIR="$PROJECT_ROOT/.claude"
+# Use user's actual ~/.claude config (or CLAUDE_USER_CONFIG override)
+CLAUDE_HOME_DIR=$(get_default_claude_dir)
 # Use user's existing SSH keys
 SSH_DIR="$HOST_HOME/.ssh"
+# MCP servers configuration (can be overridden per-project)
+MCP_SERVERS_FILE="${MCP_SERVERS_FILE:-$PROJECT_ROOT/mcp-servers.txt}"
 
 # Check if .env exists in claude-docker directory for building
 ENV_FILE="$PROJECT_ROOT/.env"
@@ -145,16 +148,19 @@ if [ "$NEED_REBUILD" = true ]; then
     eval "'$DOCKER' build $NO_CACHE $BUILD_ARGS -t claude-docker:latest \"$PROJECT_ROOT\""
 fi
 
-# Verify required directories exist
-if [ ! -d "$CLAUDE_HOME_DIR" ]; then
-    echo "ERROR: Claude config directory not found: $CLAUDE_HOME_DIR"
-    echo "Run: git submodule update --init --recursive"
+# Verify Claude config directory exists and validate structure
+if ! validate_claude_config "$CLAUDE_HOME_DIR"; then
+    echo "ERROR: Invalid Claude config directory: $CLAUDE_HOME_DIR"
+    echo "Ensure ~/.claude exists with CLAUDE.md and optional skills/, agents/ directories"
     exit 1
 fi
 
+# Build Claude config mount arguments (selective RO/RW)
+CLAUDE_MOUNTS=$(build_claude_mounts "$CLAUDE_HOME_DIR")
+
 # Log configuration info
 echo ""
-echo "Claude config: $CLAUDE_HOME_DIR/"
+print_mount_summary "$CLAUDE_HOME_DIR"
 echo "SSH keys: $SSH_DIR/"
 
 # Check SSH key setup
@@ -249,6 +255,13 @@ if [ -n "$CLAUDE_AUTH_FILE" ] && [ -f "$CLAUDE_AUTH_FILE" ]; then
     AUTH_MOUNT="-v $CLAUDE_AUTH_FILE:/home/claude-user/.claude.json:ro"
 fi
 
+# Mount MCP servers config for runtime installation
+MCP_MOUNT=""
+if [ -f "$MCP_SERVERS_FILE" ]; then
+    echo "MCP config: $MCP_SERVERS_FILE"
+    MCP_MOUNT="-v $MCP_SERVERS_FILE:/app/mcp-servers.txt:ro"
+fi
+
 # Cleanup temp auth file on exit
 cleanup() {
     if [ -n "${CLAUDE_AUTH_FILE:-}" ] && [[ "$CLAUDE_AUTH_FILE" == /tmp/* ]]; then
@@ -262,9 +275,10 @@ echo "Starting Claude Code in Docker..."
 "$DOCKER" run -it --rm \
     $DOCKER_OPTS \
     -v "$CURRENT_DIR:/workspace" \
-    -v "$CLAUDE_HOME_DIR:/home/claude-user/.claude:ro" \
+    $CLAUDE_MOUNTS \
     -v "$SSH_DIR:/home/claude-user/.ssh:ro" \
     $AUTH_MOUNT \
+    $MCP_MOUNT \
     $MOUNT_ARGS \
     $ENV_ARGS \
     -e CLAUDE_CONTINUE_FLAG="$CONTINUE_FLAG" \
